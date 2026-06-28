@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 // Needed to convert your list into a JSON string for storage
 
@@ -109,6 +110,83 @@ class TransactionsScreen extends ConsumerStatefulWidget {
 
 class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
   final double totalIncome = 50000.00;
+
+  List<PieChartSectionData> getShowingSections() {
+    final transactions = ref.watch(transactionProvider);
+    final Map<String, double> categoryTotals = {};
+    double totalExpense = 0;
+
+    for (final tx in transactions) {
+      final merchant = tx["merchant"] as String;
+      final amount = (tx["amount"] as num).toDouble();
+      final cat = getSmartCategory(merchant);
+
+      categoryTotals[cat.name] = (categoryTotals[cat.name] ?? 0) + amount;
+      totalExpense += amount;
+    }
+
+    if (totalExpense == 0) {
+      return [
+        PieChartSectionData(
+          color: Colors.grey.shade300,
+          value: 1,
+          title: 'No Expenses',
+          radius: 40,
+          titleStyle: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: Colors.black54,
+          ),
+        ),
+      ];
+    }
+
+    return categoryTotals.entries.map((entry) {
+      final catName = entry.key;
+      final amount = entry.value;
+
+      Color sectionColor = Colors.blueGrey;
+      if (catName == 'Food') sectionColor = Colors.orange;
+      if (catName == 'Caf\u00e9') sectionColor = Colors.brown;
+      if (catName == 'Transport') sectionColor = Colors.blue;
+      if (catName == 'Entertainment') sectionColor = Colors.purple;
+      if (catName == 'Shopping') sectionColor = Colors.pink;
+
+      final percentage = (amount / totalExpense) * 100;
+
+      return PieChartSectionData(
+        color: sectionColor,
+        value: amount,
+        title: '${percentage.toStringAsFixed(0)}%',
+        radius: 45,
+        titleStyle: const TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      );
+    }).toList();
+  }
+
+  Widget _buildLegendItem(Color color, String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Row(
+        children: [
+          Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            text,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _showAddTransactionDialog() {
     final merchantController = TextEditingController();
@@ -233,6 +311,38 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
                     ),
                   ],
                 )
+              ],
+            ),
+          ),
+          Container(
+            height: 180,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  flex: 4,
+                  child: PieChart(
+                    PieChartData(
+                      sectionsSpace: 2,
+                      centerSpaceRadius: 35,
+                      sections: getShowingSections(),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 3,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildLegendItem(Colors.orange, 'Food'),
+                      _buildLegendItem(Colors.brown, 'Caf\u00e9'),
+                      _buildLegendItem(Colors.blue, 'Transport'),
+                      _buildLegendItem(Colors.purple, 'Entertainment'),
+                      _buildLegendItem(Colors.pink, 'Shopping'),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
