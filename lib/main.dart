@@ -122,6 +122,9 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
   bool isLocked = true;
   final TextEditingController _pinController = TextEditingController();
   static const String correctPin = "1234";
+  String aiCoachInsight =
+      "Tap the refresh icon to get custom financial insights from Gemini.";
+  bool isAiLoading = false;
   final Map<String, double> categoryBudgets = {
     'Food': 5000.0,
     'Café': 2000.0,
@@ -303,6 +306,144 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _fetchAICoachInsight() async {
+    setState(() {
+      isAiLoading = true;
+      aiCoachInsight = "Analyzing your spending history and tracking limits...";
+    });
+
+    try {
+      const String geminiApiKey =
+          "AQ.Ab8RN6INTw-7f7iBtfGlu-JCEfv_YKHSbYnyqKPAEo5H8t7raA";
+      final model = GenerativeModel(
+        model: 'gemini-1.5-flash',
+        apiKey: geminiApiKey,
+      );
+      final transactions = ref.read(transactionProvider);
+      final dataReport = StringBuffer()
+        ..writeln("Current User Financial Context Breakdown:");
+
+      categoryBudgets.forEach((category, budget) {
+        final spent = _getCategoryTotal(category);
+        dataReport.writeln(
+          "- $category: Spent ₹${spent.toStringAsFixed(0)} out of a budget of ₹${budget.toStringAsFixed(0)}.",
+        );
+      });
+
+      dataReport.writeln("\nRecent Itemized Transactions:");
+      for (final tx in transactions.take(5)) {
+        dataReport.writeln(
+          "- ${tx['merchant']}: ₹${tx['amount']} on ${tx['date']?.toString().split(' ')[0]}",
+        );
+      }
+
+      final prompt = """
+You are a witty, smart, and slightly brutally honest AI Personal Finance Coach embedded inside a dashboard app.
+Review this user spending data below and provide a concise, single-paragraph (max 3 sentences) takeaway insight.
+Call out any category where they are dangerously close to or exceeding their budget limit.
+Keep it actionable, highly engaging, and speak directly to them.
+
+Data:
+${dataReport.toString()}
+""";
+
+      final content = [Content.text(prompt)];
+      final response = await model.generateContent(content);
+
+      if (!mounted) return;
+      setState(() {
+        aiCoachInsight = response.text ?? "Couldn't parse a response. Try again!";
+        isAiLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        aiCoachInsight =
+            "Error talking to Gemini. Please verify your API Key context!\nDetails: $e";
+        isAiLoading = false;
+      });
+    }
+  }
+
+  Widget _buildAICoachCard(Color cardColor, Color textColor) {
+    return Card(
+      color: cardColor,
+      margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      elevation: 3,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+            colors: isDarkMode
+                ? [Colors.teal[900]!, Colors.grey[850]!]
+                : [Colors.teal[50]!, Colors.white],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.psychology_rounded,
+                      color: isDarkMode ? Colors.tealAccent : Colors.teal,
+                      size: 28,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      "AI Financial Advisor",
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: textColor,
+                      ),
+                    ),
+                  ],
+                ),
+                isAiLoading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.teal,
+                        ),
+                      )
+                    : IconButton(
+                        icon: const Icon(
+                          Icons.refresh_rounded,
+                          color: Colors.teal,
+                        ),
+                        onPressed: _fetchAICoachInsight,
+                      ),
+              ],
+            ),
+            const Divider(height: 20),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 300),
+              child: Text(
+                aiCoachInsight,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontStyle: FontStyle.italic,
+                  height: 1.4,
+                  color: isDarkMode ? Colors.grey[300] : Colors.grey[800],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -577,9 +718,10 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
       return _buildLockScreen();
     }
 
-    final transactions = ref.watch(transactionProvider);
+    final transactions = ref.read(transactionProvider);
     double totalExpenses = transactions.fold(0.0, (sum, item) => sum + item["amount"]);
     double currentBalance = totalIncome - totalExpenses;
+    final cardColor = isDarkMode ? Colors.grey[850]! : Colors.white;
     final textColor = isDarkMode ? Colors.white : Colors.black87;
 
     return MaterialApp(
@@ -698,6 +840,8 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
               ],
             ),
           ),
+          _buildAICoachCard(cardColor, textColor),
+          const SizedBox(height: 8),
           Container(
             height: 180,
             padding: const EdgeInsets.symmetric(vertical: 16),
