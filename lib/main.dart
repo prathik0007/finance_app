@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:universal_html/html.dart' as html;
 // Needed to convert your list into a JSON string for storage
@@ -117,6 +118,61 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _isListening = false;
   String _voiceWords = "";
+  bool isDarkMode = false;
+  bool isLocked = true;
+  final TextEditingController _pinController = TextEditingController();
+  static const String correctPin = "1234";
+  final Map<String, double> categoryBudgets = {
+    'Food': 5000.0,
+    'Café': 2000.0,
+    'Transport': 3000.0,
+    'Entertainment': 4000.0,
+    'Shopping': 6000.0,
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _loadThemePreference();
+  }
+
+  Future<void> _loadThemePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      isDarkMode = prefs.getBool('isDarkMode') ?? false;
+    });
+  }
+
+  Future<void> _toggleTheme(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      isDarkMode = value;
+    });
+    await prefs.setBool('isDarkMode', value);
+  }
+
+  @override
+  void dispose() {
+    _pinController.dispose();
+    super.dispose();
+  }
+
+  double _getCategoryTotal(String categoryName) {
+    double total = 0.0;
+    final transactions = ref.watch(transactionProvider);
+
+    for (final tx in transactions) {
+      final merchant = tx['merchant'] ?? '';
+      final cat = getSmartCategory(merchant.toString());
+      if (cat.name == categoryName) {
+        final amt = tx['amount'] ?? 0;
+        total += (amt is num) ? amt.toDouble() : 0.0;
+      }
+    }
+
+    return total;
+  }
 
   List<PieChartSectionData> getShowingSections() {
     final transactions = ref.watch(transactionProvider);
@@ -189,6 +245,62 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
           Text(
             text,
             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBudgetProgressBar(String category, double budget) {
+    final spent = _getCategoryTotal(category);
+    final percent = budget > 0 ? (spent / budget) : 0.0;
+    final visualPercent = percent > 1.0 ? 1.0 : percent;
+    final Color textColor = isDarkMode ? Colors.white : Colors.black87;
+
+    Color progressColor = Colors.teal;
+    if (percent >= 0.85) {
+      progressColor = Colors.redAccent;
+    } else if (percent >= 0.50) {
+      progressColor = Colors.orangeAccent;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                category,
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                  color: textColor,
+                ),
+              ),
+              Text(
+                "₹${spent.toStringAsFixed(0)} / ₹${budget.toStringAsFixed(0)} (${(percent * 100).toStringAsFixed(0)}%)",
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  color: percent >= 1.0
+                      ? Colors.red
+                      : (isDarkMode ? Colors.grey[400] : Colors.grey[700]),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: visualPercent,
+              minHeight: 10,
+              backgroundColor: Colors.grey[200],
+              valueColor: AlwaysStoppedAnimation<Color>(progressColor),
+            ),
           ),
         ],
       ),
@@ -392,21 +504,119 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
     }
   }
 
+  Widget _buildLockScreen() {
+    return Scaffold(
+      backgroundColor: isDarkMode ? Colors.grey[900] : Colors.grey[100],
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.lock_outline_rounded,
+                size: 80,
+                color: isDarkMode ? Colors.tealAccent : Colors.teal,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                "Dashboard Locked",
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: isDarkMode ? Colors.white : Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "Enter PIN to view your balances",
+                style: TextStyle(color: Colors.grey[600]),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: 200,
+                child: TextField(
+                  controller: _pinController,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 4,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    letterSpacing: 8,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  decoration: InputDecoration(
+                    counterText: "",
+                    filled: true,
+                    fillColor: isDarkMode ? Colors.grey[800] : Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onChanged: (val) {
+                    if (val == correctPin) {
+                      setState(() {
+                        isLocked = false;
+                      });
+                      _pinController.clear();
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (isLocked) {
+      return _buildLockScreen();
+    }
+
     final transactions = ref.watch(transactionProvider);
     double totalExpenses = transactions.fold(0.0, (sum, item) => sum + item["amount"]);
     double currentBalance = totalIncome - totalExpenses;
+    final textColor = isDarkMode ? Colors.white : Colors.black87;
 
-    return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      themeMode: isDarkMode ? ThemeMode.dark : ThemeMode.light,
+      theme: ThemeData(
+        brightness: Brightness.light,
+        primarySwatch: Colors.teal,
+        scaffoldBackgroundColor: Colors.grey[50],
+      ),
+      darkTheme: ThemeData(
+        brightness: Brightness.dark,
+        primarySwatch: Colors.teal,
+        scaffoldBackgroundColor: Colors.grey[900],
+      ),
+      home: Scaffold(
       appBar: AppBar(
         title: const Text('AI Finance Dashboard', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.teal.shade100,
+        backgroundColor: isDarkMode ? Colors.teal[800] : Colors.teal,
         centerTitle: true,
+        actions: [
+          Icon(isDarkMode ? Icons.dark_mode : Icons.light_mode),
+          Switch(
+            value: isDarkMode,
+            onChanged: _toggleTheme,
+            activeThumbColor: Colors.tealAccent,
+          ),
+          IconButton(
+            icon: const Icon(Icons.power_settings_new),
+            tooltip: 'Lock Dashboard',
+            onPressed: () => setState(() => isLocked = true),
+          ),
+        ],
       ),
-      body: Column(
-        children: [
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
           Container(
             width: double.infinity,
             margin: const EdgeInsets.all(16),
@@ -520,17 +730,45 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
               ],
             ),
           ),
+          Card(
+            margin: const EdgeInsets.all(16.0),
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+                    child: Text(
+                      'Monthly Category Budgets',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.teal,
+                      ),
+                    ),
+                  ),
+                  const Divider(),
+                  ...categoryBudgets.entries.map((entry) {
+                    return _buildBudgetProgressBar(entry.key, entry.value);
+                  }),
+                ],
+              ),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
+                Text(
                   'Recent Transactions',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: Colors.black87,
+                    color: textColor,
                   ),
                 ),
                 Row(
@@ -550,10 +788,11 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
               ],
             ),
           ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: transactions.length,
-              itemBuilder: (context, index) {
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: transactions.length,
+            itemBuilder: (context, index) {
                 final tx = transactions[index];
                 final smartCategory = getSmartCategory(tx["merchant"] as String);
                 return Card(
@@ -595,9 +834,9 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
                   ),
                 );
               },
-            ),
           ),
-        ],
+          ],
+        ),
       ),
       floatingActionButton: Column(
         mainAxisSize: MainAxisSize.min,
@@ -619,6 +858,7 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
             child: const Icon(Icons.add, color: Colors.white),
           ),
         ],
+      ),
       ),
     );
   }
