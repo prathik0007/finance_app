@@ -56,6 +56,10 @@ class TransactionNotifier extends Notifier<List<Map<String, dynamic>>> {
     await _loadDataFromLocal();
   }
 
+  Future<void> persistDataToLocal() async {
+    await _saveDataToLocal();
+  }
+
   Future<void> _saveDataToLocal() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -141,6 +145,127 @@ final transactionProvider = NotifierProvider<TransactionNotifier, List<Map<Strin
   return TransactionNotifier();
 });
 
+const Map<String, double> _defaultCategoryBudgets = {
+  'Food': 5000.0,
+  'Café': 2000.0,
+  'Transport': 3000.0,
+  'Entertainment': 4000.0,
+  'Shopping': 6000.0,
+};
+
+const double _defaultMonthlyBudgetCap = 50000.0;
+
+class BudgetLimitsNotifier extends Notifier<Map<String, double>> {
+  static const String _savedBudgetLimitsKey = 'saved_budget_limits';
+  bool _hasHydrated = false;
+
+  @override
+  Map<String, double> build() {
+    _loadDataFromLocal();
+    return Map<String, double>.from(_defaultCategoryBudgets);
+  }
+
+  Future<void> updateCategoryLimit(String category, double newLimit) async {
+    if (newLimit <= 0) return;
+
+    state = {
+      ...state,
+      category: newLimit,
+    };
+
+    await _saveDataToLocal();
+  }
+
+  Future<void> _saveDataToLocal() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_savedBudgetLimitsKey, jsonEncode(state));
+      await ref.read(transactionProvider.notifier).persistDataToLocal();
+    } catch (e) {
+      debugPrint('Save budget limits error: $e');
+    }
+  }
+
+  Future<void> _loadDataFromLocal() async {
+    if (_hasHydrated) return;
+    _hasHydrated = true;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_savedBudgetLimitsKey);
+      if (raw == null || raw.trim().isEmpty) return;
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+
+      final merged = Map<String, double>.from(_defaultCategoryBudgets);
+      decoded.forEach((key, value) {
+        final parsedValue = value is num
+            ? value.toDouble()
+            : double.tryParse(value.toString());
+        if (parsedValue != null && parsedValue > 0) {
+          merged[key.toString()] = parsedValue;
+        }
+      });
+
+      state = merged;
+    } catch (e) {
+      debugPrint('Load budget limits error: $e');
+    }
+  }
+}
+
+final budgetLimitsProvider =
+    NotifierProvider<BudgetLimitsNotifier, Map<String, double>>(() {
+  return BudgetLimitsNotifier();
+});
+
+class MonthlyBudgetCapNotifier extends Notifier<double> {
+  static const String _savedMonthlyBudgetCapKey = 'saved_monthly_budget_cap';
+  bool _hasHydrated = false;
+
+  @override
+  double build() {
+    _loadDataFromLocal();
+    return _defaultMonthlyBudgetCap;
+  }
+
+  Future<void> updateBudgetCap(double newCap) async {
+    if (newCap <= 0) return;
+    state = newCap;
+    await _saveDataToLocal();
+  }
+
+  Future<void> _saveDataToLocal() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(_savedMonthlyBudgetCapKey, state);
+      await ref.read(transactionProvider.notifier).persistDataToLocal();
+    } catch (e) {
+      debugPrint('Save monthly budget cap error: $e');
+    }
+  }
+
+  Future<void> _loadDataFromLocal() async {
+    if (_hasHydrated) return;
+    _hasHydrated = true;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getDouble(_savedMonthlyBudgetCapKey);
+      if (saved != null && saved > 0) {
+        state = saved;
+      }
+    } catch (e) {
+      debugPrint('Load monthly budget cap error: $e');
+    }
+  }
+}
+
+final monthlyBudgetCapProvider = NotifierProvider<MonthlyBudgetCapNotifier, double>(() {
+  return MonthlyBudgetCapNotifier();
+});
+
 String get _stableApiKey => dotenv.env['GEMINI_API_KEY'] ?? '';
 
 // --- MAIN NAVIGATION HOST ---
@@ -159,6 +284,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   final List<Widget> _screens = [
     const TransactionsScreen(),
     const AiChatScreen(),
+    const SettingsScreen(),
   ];
 
   @override
@@ -183,6 +309,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             selectedIcon: Icon(Icons.chat_bubble, color: Colors.teal),
             label: 'AI Chat',
           ),
+          NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings, color: Colors.teal),
+            label: 'Settings',
+          ),
         ],
       ),
     );
@@ -200,7 +331,7 @@ class TransactionsScreen extends ConsumerStatefulWidget {
 }
 
 class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
-  final double totalIncome = 50000.00;
+  static const double _defaultIncome = _defaultMonthlyBudgetCap;
   double _remainingBalance = 50000.00;
   final TextEditingController _searchController = TextEditingController();
   String _transactionSearchQuery = '';
@@ -215,14 +346,6 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
       "Tap the refresh icon to get custom financial insights from Gemini.";
   bool isAiLoading = false;
   bool isScanLoading = false;
-  final Map<String, double> categoryBudgets = {
-    'Food': 5000.0,
-    'Café': 2000.0,
-    'Transport': 3000.0,
-    'Entertainment': 4000.0,
-    'Shopping': 6000.0,
-  };
-
   String _normalizeCategoryLabel(String category) {
     final normalized = category.trim().toLowerCase();
 
@@ -269,7 +392,8 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
       0,
       (sum, item) => sum + (item['amount'] as num).toDouble(),
     );
-    _remainingBalance = totalIncome - existingExpenses;
+    final monthlyBudgetCap = ref.read(monthlyBudgetCapProvider);
+    _remainingBalance = monthlyBudgetCap - existingExpenses;
     _loadThemePreference();
     _searchController.addListener(() {
       final currentQuery = _searchController.text;
@@ -289,8 +413,10 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
       (sum, item) => sum + (item['amount'] as num).toDouble(),
     );
 
+    final monthlyBudgetCap = ref.read(monthlyBudgetCapProvider);
+
     setState(() {
-      _remainingBalance = totalIncome - hydratedExpenses;
+      _remainingBalance = monthlyBudgetCap - hydratedExpenses;
     });
   }
 
@@ -525,7 +651,11 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
     );
   }
 
-  Widget _buildAnalyticsInsightCard(Color cardColor, Color textColor) {
+  Widget _buildAnalyticsInsightCard(
+    Color cardColor,
+    Color textColor,
+    Map<String, double> categoryBudgets,
+  ) {
     final Map<String, double> spentByCategory = {};
     double totalSpent = 0.0;
     double totalBudget = 0.0;
@@ -684,6 +814,7 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
         'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$_stableApiKey',
       );
       final transactions = ref.read(transactionProvider);
+      final categoryBudgets = ref.read(budgetLimitsProvider);
       final dataReport = StringBuffer();
 
       categoryBudgets.forEach((category, budget) {
@@ -905,6 +1036,7 @@ ${dataReport.toString()}
         });
 
         if (!mounted) return;
+        final categoryBudgets = ref.read(budgetLimitsProvider);
         if (categoryBudgets.containsKey(category)) {
           final categoryBudgetLimit = categoryBudgets[category]!;
           final updatedCategorySpent = _getCategoryTotal(category);
@@ -1255,9 +1387,11 @@ ${dataReport.toString()}
     }
 
     final transactions = ref.watch(transactionProvider);
+    final categoryBudgets = ref.watch(budgetLimitsProvider);
+    final monthlyBudgetCap = ref.watch(monthlyBudgetCapProvider);
     final filteredTransactions = _getFilteredTransactions(transactions);
     double totalExpenses = transactions.fold(0.0, (sum, item) => sum + item["amount"]);
-    double currentBalance = _remainingBalance;
+    double currentBalance = monthlyBudgetCap - totalExpenses;
     final cardColor = isDarkMode ? Colors.grey[850]! : Colors.white;
     final textColor = isDarkMode ? Colors.white : Colors.black87;
 
@@ -1351,7 +1485,7 @@ ${dataReport.toString()}
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text('Income', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                            Text('₹${totalIncome.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                            Text('₹${monthlyBudgetCap.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                           ],
                         ),
                       ],
@@ -1403,7 +1537,7 @@ ${dataReport.toString()}
           ),
           const SizedBox(height: 8),
           _buildExpenseTrendChart(cardColor, textColor),
-          _buildAnalyticsInsightCard(cardColor, textColor),
+          _buildAnalyticsInsightCard(cardColor, textColor, categoryBudgets),
           Card(
             margin: const EdgeInsets.all(16.0),
             elevation: 2,
@@ -1591,6 +1725,218 @@ ${dataReport.toString()}
           ),
         ],
       ),
+      ),
+    );
+  }
+}
+
+
+// --- TAB 3: SETTINGS / PROFILE SCREEN ---
+
+class SettingsScreen extends ConsumerStatefulWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  late final TextEditingController _monthlyCapController;
+  final Map<String, TextEditingController> _categoryControllers = {};
+
+  @override
+  void initState() {
+    super.initState();
+    final monthlyCap = ref.read(monthlyBudgetCapProvider);
+    final budgets = ref.read(budgetLimitsProvider);
+
+    _monthlyCapController =
+        TextEditingController(text: monthlyCap.toStringAsFixed(0));
+    for (final entry in budgets.entries) {
+      _categoryControllers[entry.key] =
+          TextEditingController(text: entry.value.toStringAsFixed(0));
+    }
+  }
+
+  @override
+  void dispose() {
+    _monthlyCapController.dispose();
+    for (final controller in _categoryControllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  Widget _buildProfileHeader() {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Row(
+          children: [
+            const CircleAvatar(
+              radius: 28,
+              backgroundColor: Colors.teal,
+              child: Icon(Icons.person_rounded, color: Colors.white, size: 30),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  'Prathik',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Student / Premium User',
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveAllBudgetInputs() async {
+    final monthlyCap = double.tryParse(_monthlyCapController.text.trim());
+    if (monthlyCap != null && monthlyCap > 0) {
+      await ref.read(monthlyBudgetCapProvider.notifier).updateBudgetCap(monthlyCap);
+    }
+
+    for (final entry in _categoryControllers.entries) {
+      final parsed = double.tryParse(entry.value.text.trim());
+      if (parsed != null && parsed > 0) {
+        await ref
+            .read(budgetLimitsProvider.notifier)
+            .updateCategoryLimit(entry.key, parsed);
+      }
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Budget settings saved successfully.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final budgetLimits = ref.watch(budgetLimitsProvider);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Settings & Profile'),
+        centerTitle: true,
+        backgroundColor: Colors.teal,
+      ),
+      body: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildProfileHeader(),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              child: Text(
+                'Monthly Budget Cap',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.teal,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+              child: TextField(
+                controller: _monthlyCapController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: 'Total Monthly Cap',
+                  prefixIcon: const Icon(Icons.savings_rounded),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onChanged: (value) {
+                  final parsed = double.tryParse(value.trim());
+                  if (parsed != null && parsed > 0) {
+                    ref
+                        .read(monthlyBudgetCapProvider.notifier)
+                        .updateBudgetCap(parsed);
+                  }
+                },
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+              child: Text(
+                'Category Limits',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.teal,
+                ),
+              ),
+            ),
+            ...budgetLimits.entries.map((entry) {
+              final controller = _categoryControllers.putIfAbsent(
+                entry.key,
+                () => TextEditingController(text: entry.value.toStringAsFixed(0)),
+              );
+
+              return Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
+                child: TextField(
+                  controller: controller,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: '${entry.key} Limit',
+                    prefixIcon: const Icon(Icons.tune_rounded),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onChanged: (value) {
+                    final parsed = double.tryParse(value.trim());
+                    if (parsed != null && parsed > 0) {
+                      ref
+                          .read(budgetLimitsProvider.notifier)
+                          .updateCategoryLimit(entry.key, parsed);
+                    }
+                  },
+                ),
+              );
+            }),
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _saveAllBudgetInputs,
+                  icon: const Icon(Icons.save_rounded),
+                  label: const Text('Save Budget Settings'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.teal,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
