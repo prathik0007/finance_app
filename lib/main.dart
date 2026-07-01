@@ -439,6 +439,102 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
     );
   }
 
+  Widget _buildAnalyticsInsightCard(Color cardColor, Color textColor) {
+    final Map<String, double> spentByCategory = {};
+    double totalSpent = 0.0;
+    double totalBudget = 0.0;
+
+    categoryBudgets.forEach((category, budget) {
+      final spent = _getCategoryTotal(category);
+      spentByCategory[category] = spent;
+      totalSpent += spent;
+      totalBudget += budget;
+    });
+
+    String topCategory = 'General';
+    double topSpent = 0.0;
+    double topBudget = 1.0;
+
+    spentByCategory.forEach((category, spent) {
+      if (spent >= topSpent) {
+        topSpent = spent;
+        topCategory = category;
+        topBudget = categoryBudgets[category] ?? 1.0;
+      }
+    });
+
+    final overallRatio = totalBudget > 0 ? totalSpent / totalBudget : 0.0;
+    final topCategoryRatio = topBudget > 0 ? topSpent / topBudget : 0.0;
+    final allUnderHalf = categoryBudgets.entries.every((entry) {
+      final spent = spentByCategory[entry.key] ?? 0.0;
+      return spent < (entry.value * 0.5);
+    });
+
+    final bool nearLimit = topCategoryRatio >= 0.8;
+    final IconData insightIcon = nearLimit ? Icons.lightbulb_rounded : Icons.show_chart_rounded;
+    final Color accentColor = nearLimit
+        ? (isDarkMode ? Colors.orangeAccent : Colors.deepOrange)
+        : (isDarkMode ? Colors.tealAccent : Colors.teal);
+
+    final String insightText = allUnderHalf
+        ? '🎉 Great job, Prathik! You are managing your budget excellently this week.'
+        : nearLimit
+            ? '💡 Tip: Your spending is highest in $topCategory this month. Consider slowing down here!'
+            : '💡 Insight: $topCategory is your most active spend category right now. Keep an eye on it as your total budget usage reaches ${(overallRatio * 100).toStringAsFixed(0)}%.';
+
+    return Card(
+      color: cardColor,
+      margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16.0),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: accentColor.withValues(alpha: 0.35)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(insightIcon, color: accentColor),
+                const SizedBox(width: 8),
+                Text(
+                  'AI Financial Coach',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: textColor,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              insightText,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.45,
+                color: isDarkMode ? Colors.grey[300] : Colors.grey[800],
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Overall budget usage: ${(overallRatio * 100).toStringAsFixed(0)}%',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: accentColor,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildBudgetProgressBar(String category, double budget) {
     final spent = _getCategoryTotal(category);
     final percent = budget > 0 ? (spent / budget) : 0.0;
@@ -1176,6 +1272,7 @@ ${dataReport.toString()}
           _buildAICoachCard(cardColor, textColor),
           const SizedBox(height: 8),
           _buildExpenseTrendChart(cardColor, textColor),
+          _buildAnalyticsInsightCard(cardColor, textColor),
           Card(
             margin: const EdgeInsets.all(16.0),
             elevation: 2,
