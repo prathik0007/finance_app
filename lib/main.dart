@@ -63,18 +63,22 @@ class TransactionNotifier extends Notifier<List<Map<String, dynamic>>> {
   Future<void> _saveDataToLocal() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      final preferredCurrency = ref.read(currencyPreferenceProvider);
       final payload = jsonEncode(
-        state
-            .map(
-              (tx) => {
-                'merchant': tx['merchant']?.toString() ?? 'Unknown Merchant',
-                'amount': (tx['amount'] as num?)?.toDouble() ?? 0.0,
-                'date': tx['date']?.toString() ?? DateTime.now().toString(),
-                if (tx['category'] != null)
-                  'category': tx['category']?.toString(),
-              },
-            )
-            .toList(),
+        {
+          'preferredCurrency': preferredCurrency,
+          'transactions': state
+              .map(
+                (tx) => {
+                  'merchant': tx['merchant']?.toString() ?? 'Unknown Merchant',
+                  'amount': (tx['amount'] as num?)?.toDouble() ?? 0.0,
+                  'date': tx['date']?.toString() ?? DateTime.now().toString(),
+                  if (tx['category'] != null)
+                    'category': tx['category']?.toString(),
+                },
+              )
+              .toList(),
+        },
       );
 
       await prefs.setString(_savedTransactionsKey, payload);
@@ -93,10 +97,28 @@ class TransactionNotifier extends Notifier<List<Map<String, dynamic>>> {
       if (raw == null || raw.trim().isEmpty) return;
 
       final decoded = jsonDecode(raw);
-      if (decoded is! List) return;
+      List<dynamic>? decodedTransactions;
+
+      if (decoded is List) {
+        decodedTransactions = decoded;
+      } else if (decoded is Map<String, dynamic>) {
+        final savedCurrency = decoded['preferredCurrency']?.toString();
+        if (savedCurrency != null && _supportedCurrencies.contains(savedCurrency)) {
+          ref
+              .read(currencyPreferenceProvider.notifier)
+              .hydrateCurrencyCode(savedCurrency);
+        }
+
+        final txList = decoded['transactions'];
+        if (txList is List) {
+          decodedTransactions = txList;
+        }
+      }
+
+      if (decodedTransactions == null) return;
 
       final loaded = <Map<String, dynamic>>[];
-      for (final item in decoded) {
+      for (final item in decodedTransactions) {
         if (item is! Map) continue;
 
         final merchant = item['merchant']?.toString() ?? 'Unknown Merchant';
@@ -143,6 +165,72 @@ class TransactionNotifier extends Notifier<List<Map<String, dynamic>>> {
 
 final transactionProvider = NotifierProvider<TransactionNotifier, List<Map<String, dynamic>>>(() {
   return TransactionNotifier();
+});
+
+const Map<String, String> _currencySymbols = {
+  'INR': '₹',
+  'USD': '\$',
+  'EUR': '€',
+};
+
+const Map<String, double> _currencyToInrRate = {
+  'INR': 1.0,
+  'USD': 83.0,
+  'EUR': 90.0,
+};
+
+const List<String> _supportedCurrencies = ['INR', 'USD', 'EUR'];
+
+class CurrencyPreferenceNotifier extends Notifier<String> {
+  static const String _savedCurrencyKey = 'saved_currency_code';
+  bool _hasHydrated = false;
+
+  @override
+  String build() {
+    _loadDataFromLocal();
+    return 'INR';
+  }
+
+  Future<void> setCurrencyCode(String currencyCode) async {
+    if (!_supportedCurrencies.contains(currencyCode)) return;
+    state = currencyCode;
+    await _saveDataToLocal();
+  }
+
+  void hydrateCurrencyCode(String currencyCode) {
+    if (!_supportedCurrencies.contains(currencyCode)) return;
+    state = currencyCode;
+  }
+
+  Future<void> _saveDataToLocal() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_savedCurrencyKey, state);
+      await ref.read(transactionProvider.notifier).persistDataToLocal();
+    } catch (e) {
+      debugPrint('Save currency preference error: $e');
+    }
+  }
+
+  Future<void> _loadDataFromLocal() async {
+    if (_hasHydrated) return;
+    _hasHydrated = true;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString(_savedCurrencyKey);
+      if (saved != null && _supportedCurrencies.contains(saved)) {
+        state = saved;
+      }
+    } catch (e) {
+      debugPrint('Load currency preference error: $e');
+    }
+  }
+}
+
+final currencyPreferenceProvider =
+    NotifierProvider<CurrencyPreferenceNotifier, String>(() {
+  return CurrencyPreferenceNotifier();
 });
 
 const Map<String, double> _defaultCategoryBudgets = {
@@ -331,7 +419,6 @@ class TransactionsScreen extends ConsumerStatefulWidget {
 }
 
 class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
-  static const double _defaultIncome = _defaultMonthlyBudgetCap;
   double _remainingBalance = 50000.00;
   final TextEditingController _searchController = TextEditingController();
   String _transactionSearchQuery = '';
@@ -364,6 +451,15 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
       default:
         return category.trim();
     }
+  }
+
+  double _convertFromInr(double inrAmount, String currencyCode) {
+    final rate = _currencyToInrRate[currencyCode] ?? 1.0;
+    return inrAmount / rate;
+  }
+
+  String _currencySymbol(String currencyCode) {
+    return _currencySymbols[currencyCode] ?? '₹';
   }
 
   void _recordTransaction(
@@ -655,6 +751,7 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
     Color cardColor,
     Color textColor,
     Map<String, double> categoryBudgets,
+    String currencyCode,
   ) {
     final Map<String, double> spentByCategory = {};
     double totalSpent = 0.0;
@@ -685,6 +782,8 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
       final spent = spentByCategory[entry.key] ?? 0.0;
       return spent < (entry.value * 0.5);
     });
+    final convertedTopSpent = _convertFromInr(topSpent, currencyCode);
+    final currencySymbol = _currencySymbol(currencyCode);
 
     final bool nearLimit = topCategoryRatio >= 0.8;
     final IconData insightIcon = nearLimit ? Icons.lightbulb_rounded : Icons.show_chart_rounded;
@@ -738,6 +837,15 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
             ),
             const SizedBox(height: 10),
             Text(
+              'Top spend in $topCategory: $currencySymbol${convertedTopSpent.toStringAsFixed(2)}',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: textColor,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
               'Overall budget usage: ${(overallRatio * 100).toStringAsFixed(0)}%',
               style: TextStyle(
                 fontSize: 12,
@@ -751,11 +859,14 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
     );
   }
 
-  Widget _buildBudgetProgressBar(String category, double budget) {
+  Widget _buildBudgetProgressBar(String category, double budget, String currencyCode) {
     final spent = _getCategoryTotal(category);
     final percent = budget > 0 ? (spent / budget) : 0.0;
     final visualPercent = percent > 1.0 ? 1.0 : percent;
     final Color textColor = isDarkMode ? Colors.white : Colors.black87;
+    final symbol = _currencySymbol(currencyCode);
+    final convertedSpent = _convertFromInr(spent, currencyCode);
+    final convertedBudget = _convertFromInr(budget, currencyCode);
 
     final Color progressColor =
         percent > 0.80 ? Colors.red : Colors.teal;
@@ -777,7 +888,7 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
                 ),
               ),
               Text(
-                "₹${spent.toStringAsFixed(0)} / ₹${budget.toStringAsFixed(0)} (${(percent * 100).toStringAsFixed(0)}%)",
+                "$symbol${convertedSpent.toStringAsFixed(0)} / $symbol${convertedBudget.toStringAsFixed(0)} (${(percent * 100).toStringAsFixed(0)}%)",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 13,
@@ -815,18 +926,24 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
       );
       final transactions = ref.read(transactionProvider);
       final categoryBudgets = ref.read(budgetLimitsProvider);
+      final currencyCode = ref.read(currencyPreferenceProvider);
+      final symbol = _currencySymbol(currencyCode);
       final dataReport = StringBuffer();
 
       categoryBudgets.forEach((category, budget) {
         final spent = _getCategoryTotal(category);
+        final convertedSpent = _convertFromInr(spent, currencyCode);
+        final convertedBudget = _convertFromInr(budget, currencyCode);
         dataReport.writeln(
-          "- $category: Spent ₹$spent out of a budget of ₹$budget.",
+          "- $category: Spent $symbol${convertedSpent.toStringAsFixed(2)} out of a budget of $symbol${convertedBudget.toStringAsFixed(2)}.",
         );
       });
 
       for (final tx in transactions.take(5)) {
+        final amount = (tx['amount'] as num?)?.toDouble() ?? 0.0;
+        final convertedAmount = _convertFromInr(amount, currencyCode);
         dataReport.writeln(
-          "- ${tx['merchant']}: ₹${tx['amount']} on ${tx['date']?.toString().split(' ')[0]}",
+          "- ${tx['merchant']}: $symbol${convertedAmount.toStringAsFixed(2)} on ${tx['date']?.toString().split(' ')[0]}",
         );
       }
 
@@ -1038,8 +1155,12 @@ ${dataReport.toString()}
         if (!mounted) return;
         final categoryBudgets = ref.read(budgetLimitsProvider);
         if (categoryBudgets.containsKey(category)) {
+          final currencyCode = ref.read(currencyPreferenceProvider);
+          final symbol = _currencySymbol(currencyCode);
           final categoryBudgetLimit = categoryBudgets[category]!;
           final updatedCategorySpent = _getCategoryTotal(category);
+          final convertedSpent = _convertFromInr(updatedCategorySpent, currencyCode);
+          final convertedBudget = _convertFromInr(categoryBudgetLimit, currencyCode);
           final budgetUsage =
               categoryBudgetLimit > 0 ? updatedCategorySpent / categoryBudgetLimit : 0.0;
 
@@ -1048,8 +1169,8 @@ ${dataReport.toString()}
             final alertColor = isCritical ? Colors.redAccent : Colors.orangeAccent;
             final thresholdLabel = isCritical ? '100%' : '80%';
             final message = isCritical
-                ? '⚠️ Budget exceeded for $category: ₹${updatedCategorySpent.toStringAsFixed(0)} / ₹${categoryBudgetLimit.toStringAsFixed(0)} used.'
-                : '⚠️ Budget warning for $category: ₹${updatedCategorySpent.toStringAsFixed(0)} / ₹${categoryBudgetLimit.toStringAsFixed(0)} used ($thresholdLabel+).';
+              ? '⚠️ Budget exceeded for $category: $symbol${convertedSpent.toStringAsFixed(0)} / $symbol${convertedBudget.toStringAsFixed(0)} used.'
+              : '⚠️ Budget warning for $category: $symbol${convertedSpent.toStringAsFixed(0)} / $symbol${convertedBudget.toStringAsFixed(0)} used ($thresholdLabel+).';
 
             ScaffoldMessenger.of(context)
               ..clearSnackBars()
@@ -1389,9 +1510,14 @@ ${dataReport.toString()}
     final transactions = ref.watch(transactionProvider);
     final categoryBudgets = ref.watch(budgetLimitsProvider);
     final monthlyBudgetCap = ref.watch(monthlyBudgetCapProvider);
+    final currencyCode = ref.watch(currencyPreferenceProvider);
+    final currencySymbol = _currencySymbol(currencyCode);
     final filteredTransactions = _getFilteredTransactions(transactions);
     double totalExpenses = transactions.fold(0.0, (sum, item) => sum + item["amount"]);
     double currentBalance = monthlyBudgetCap - totalExpenses;
+    final convertedCurrentBalance = _convertFromInr(currentBalance, currencyCode);
+    final convertedMonthlyCap = _convertFromInr(monthlyBudgetCap, currencyCode);
+    final convertedTotalExpenses = _convertFromInr(totalExpenses, currencyCode);
     final cardColor = isDarkMode ? Colors.grey[850]! : Colors.white;
     final textColor = isDarkMode ? Colors.white : Colors.black87;
 
@@ -1467,7 +1593,7 @@ ${dataReport.toString()}
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '₹${currentBalance.toStringAsFixed(2)}',
+                  '$currencySymbol${convertedCurrentBalance.toStringAsFixed(2)}',
                   style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 20),
@@ -1485,7 +1611,7 @@ ${dataReport.toString()}
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text('Income', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                            Text('₹${monthlyBudgetCap.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                            Text('$currencySymbol${convertedMonthlyCap.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                           ],
                         ),
                       ],
@@ -1501,7 +1627,7 @@ ${dataReport.toString()}
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text('Expenses', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                            Text('₹${totalExpenses.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                            Text('$currencySymbol${convertedTotalExpenses.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                           ],
                         ),
                       ],
@@ -1537,7 +1663,7 @@ ${dataReport.toString()}
           ),
           const SizedBox(height: 8),
           _buildExpenseTrendChart(cardColor, textColor),
-          _buildAnalyticsInsightCard(cardColor, textColor, categoryBudgets),
+          _buildAnalyticsInsightCard(cardColor, textColor, categoryBudgets, currencyCode),
           Card(
             margin: const EdgeInsets.all(16.0),
             elevation: 2,
@@ -1560,7 +1686,7 @@ ${dataReport.toString()}
                   ),
                   const Divider(),
                   ...categoryBudgets.entries.map((entry) {
-                    return _buildBudgetProgressBar(entry.key, entry.value);
+                    return _buildBudgetProgressBar(entry.key, entry.value, currencyCode);
                   }),
                 ],
               ),
@@ -1643,6 +1769,7 @@ ${dataReport.toString()}
                     tx['merchant']?.toString() ?? tx['merchantName']?.toString() ?? 'Unknown Merchant';
                 final smartCategory = getSmartCategory(merchantName);
                 final amount = (tx['amount'] as num?)?.toDouble() ?? 0.0;
+                final convertedAmount = _convertFromInr(amount, currencyCode);
                 return Card(
                   margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                   elevation: 2,
@@ -1676,7 +1803,7 @@ ${dataReport.toString()}
                       ),
                     ),
                     trailing: Text(
-                      '- ₹${amount.toStringAsFixed(2)}',
+                      '- $currencySymbol${convertedAmount.toStringAsFixed(2)}',
                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.redAccent),
                     ),
                   ),
@@ -1744,17 +1871,49 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late final TextEditingController _monthlyCapController;
   final Map<String, TextEditingController> _categoryControllers = {};
 
+  double _convertFromInr(double inrAmount, String currencyCode) {
+    final rate = _currencyToInrRate[currencyCode] ?? 1.0;
+    return inrAmount / rate;
+  }
+
+  double _convertToInr(double amount, String currencyCode) {
+    final rate = _currencyToInrRate[currencyCode] ?? 1.0;
+    return amount * rate;
+  }
+
+  String _currencySymbol(String currencyCode) {
+    return _currencySymbols[currencyCode] ?? '₹';
+  }
+
+  void _refreshBudgetControllers(String currencyCode) {
+    final monthlyCapInInr = ref.read(monthlyBudgetCapProvider);
+    final categoryBudgetsInInr = ref.read(budgetLimitsProvider);
+
+    _monthlyCapController.text =
+        _convertFromInr(monthlyCapInInr, currencyCode).toStringAsFixed(2);
+
+    for (final entry in categoryBudgetsInInr.entries) {
+      final controller = _categoryControllers.putIfAbsent(
+        entry.key,
+        () => TextEditingController(),
+      );
+      controller.text =
+          _convertFromInr(entry.value, currencyCode).toStringAsFixed(2);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     final monthlyCap = ref.read(monthlyBudgetCapProvider);
     final budgets = ref.read(budgetLimitsProvider);
+    final currencyCode = ref.read(currencyPreferenceProvider);
 
     _monthlyCapController =
-        TextEditingController(text: monthlyCap.toStringAsFixed(0));
+        TextEditingController(text: _convertFromInr(monthlyCap, currencyCode).toStringAsFixed(2));
     for (final entry in budgets.entries) {
       _categoryControllers[entry.key] =
-          TextEditingController(text: entry.value.toStringAsFixed(0));
+          TextEditingController(text: _convertFromInr(entry.value, currencyCode).toStringAsFixed(2));
     }
   }
 
@@ -1803,17 +1962,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _saveAllBudgetInputs() async {
+    final currencyCode = ref.read(currencyPreferenceProvider);
     final monthlyCap = double.tryParse(_monthlyCapController.text.trim());
     if (monthlyCap != null && monthlyCap > 0) {
-      await ref.read(monthlyBudgetCapProvider.notifier).updateBudgetCap(monthlyCap);
+      final monthlyCapInInr = _convertToInr(monthlyCap, currencyCode);
+      await ref.read(monthlyBudgetCapProvider.notifier).updateBudgetCap(monthlyCapInInr);
     }
 
     for (final entry in _categoryControllers.entries) {
       final parsed = double.tryParse(entry.value.text.trim());
       if (parsed != null && parsed > 0) {
+        final parsedInInr = _convertToInr(parsed, currencyCode);
         await ref
             .read(budgetLimitsProvider.notifier)
-            .updateCategoryLimit(entry.key, parsed);
+            .updateCategoryLimit(entry.key, parsedInInr);
       }
     }
 
@@ -1829,6 +1991,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final budgetLimits = ref.watch(budgetLimitsProvider);
+    final selectedCurrency = ref.watch(currencyPreferenceProvider);
+    final currencySymbol = _currencySymbol(selectedCurrency);
 
     return Scaffold(
       appBar: AppBar(
@@ -1841,6 +2005,43 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildProfileHeader(),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              child: Text(
+                'Preferred Currency',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.teal,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+              child: DropdownButtonFormField<String>(
+                value: selectedCurrency,
+                items: _supportedCurrencies.map((currency) {
+                  return DropdownMenuItem<String>(
+                    value: currency,
+                    child: Text('$currency (${_currencySymbol(currency)})'),
+                  );
+                }).toList(),
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.currency_exchange_rounded),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onChanged: (value) async {
+                  if (value == null) return;
+                  await ref.read(currencyPreferenceProvider.notifier).setCurrencyCode(value);
+                  if (!mounted) return;
+                  setState(() {
+                    _refreshBudgetControllers(value);
+                  });
+                },
+              ),
+            ),
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
               child: Text(
@@ -1858,7 +2059,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 controller: _monthlyCapController,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(
-                  labelText: 'Total Monthly Cap',
+                  labelText: 'Total Monthly Cap ($currencySymbol)',
                   prefixIcon: const Icon(Icons.savings_rounded),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -1867,9 +2068,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onChanged: (value) {
                   final parsed = double.tryParse(value.trim());
                   if (parsed != null && parsed > 0) {
+                    final parsedInInr = _convertToInr(parsed, selectedCurrency);
                     ref
                         .read(monthlyBudgetCapProvider.notifier)
-                        .updateBudgetCap(parsed);
+                        .updateBudgetCap(parsedInInr);
                   }
                 },
               ),
@@ -1888,7 +2090,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ...budgetLimits.entries.map((entry) {
               final controller = _categoryControllers.putIfAbsent(
                 entry.key,
-                () => TextEditingController(text: entry.value.toStringAsFixed(0)),
+                () => TextEditingController(
+                  text: _convertFromInr(entry.value, selectedCurrency).toStringAsFixed(2),
+                ),
               );
 
               return Padding(
@@ -1899,7 +2103,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
                   decoration: InputDecoration(
-                    labelText: '${entry.key} Limit',
+                    labelText: '${entry.key} Limit ($currencySymbol)',
                     prefixIcon: const Icon(Icons.tune_rounded),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -1908,9 +2112,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   onChanged: (value) {
                     final parsed = double.tryParse(value.trim());
                     if (parsed != null && parsed > 0) {
+                      final parsedInInr = _convertToInr(parsed, selectedCurrency);
                       ref
                           .read(budgetLimitsProvider.notifier)
-                          .updateCategoryLimit(entry.key, parsed);
+                          .updateCategoryLimit(entry.key, parsedInInr);
                     }
                   },
                 ),
