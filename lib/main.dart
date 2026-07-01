@@ -260,6 +260,88 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
     );
   }
 
+  Widget _buildExpenseTrendChart(Color cardColor, Color textColor) {
+    return Card(
+      color: cardColor,
+      margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      elevation: 3,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.donut_large_rounded,
+                  color: isDarkMode ? Colors.tealAccent : Colors.teal,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Expense Breakdown',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: textColor,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isWide = constraints.maxWidth >= 520;
+                final chart = SizedBox(
+                  height: 190,
+                  child: PieChart(
+                    PieChartData(
+                      sectionsSpace: 3,
+                      centerSpaceRadius: 42,
+                      startDegreeOffset: -90,
+                      sections: getShowingSections(),
+                    ),
+                    swapAnimationDuration: const Duration(milliseconds: 650),
+                    swapAnimationCurve: Curves.easeOutCubic,
+                  ),
+                );
+                final legend = Wrap(
+                  spacing: 14,
+                  runSpacing: 8,
+                  children: [
+                    _buildLegendItem(Colors.orange, 'Food'),
+                    _buildLegendItem(Colors.brown, 'Caf\u00e9'),
+                    _buildLegendItem(Colors.blue, 'Transport'),
+                    _buildLegendItem(Colors.purple, 'Entertainment'),
+                    _buildLegendItem(Colors.pink, 'Shopping'),
+                  ],
+                );
+
+                if (isWide) {
+                  return Row(
+                    children: [
+                      Expanded(flex: 4, child: chart),
+                      const SizedBox(width: 18),
+                      Expanded(flex: 3, child: legend),
+                    ],
+                  );
+                }
+
+                return Column(
+                  children: [
+                    chart,
+                    const SizedBox(height: 12),
+                    Align(alignment: Alignment.centerLeft, child: legend),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildBudgetProgressBar(String category, double budget) {
     final spent = _getCategoryTotal(category);
     final percent = budget > 0 ? (spent / budget) : 0.0;
@@ -945,38 +1027,7 @@ ${dataReport.toString()}
           ),
           _buildAICoachCard(cardColor, textColor),
           const SizedBox(height: 8),
-          Container(
-            height: 180,
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Row(
-              children: [
-                Expanded(
-                  flex: 4,
-                  child: PieChart(
-                    PieChartData(
-                      sectionsSpace: 2,
-                      centerSpaceRadius: 35,
-                      sections: getShowingSections(),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 3,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildLegendItem(Colors.orange, 'Food'),
-                      _buildLegendItem(Colors.brown, 'Caf\u00e9'),
-                      _buildLegendItem(Colors.blue, 'Transport'),
-                      _buildLegendItem(Colors.purple, 'Entertainment'),
-                      _buildLegendItem(Colors.pink, 'Shopping'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
+          _buildExpenseTrendChart(cardColor, textColor),
           Card(
             margin: const EdgeInsets.all(16.0),
             elevation: 2,
