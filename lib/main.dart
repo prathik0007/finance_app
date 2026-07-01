@@ -48,9 +48,14 @@ class TransactionNotifier extends Notifier<List<Map<String, dynamic>>> {
     ];
   }
 
-  void addTransaction(String merchant, double amount) {
+  void addTransaction(String merchant, double amount, {String? category}) {
     state = [
-      {"merchant": merchant, "amount": amount, "date": "Just Now"},
+      {
+        "merchant": merchant,
+        "amount": amount,
+        "date": "Just Now",
+        if (category != null) "category": category,
+      },
       ...state,
     ];
   }
@@ -120,6 +125,7 @@ class TransactionsScreen extends ConsumerStatefulWidget {
 
 class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
   final double totalIncome = 50000.00;
+  double _remainingBalance = 50000.00;
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _isListening = false;
   String _voiceWords = "";
@@ -139,9 +145,52 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
     'Shopping': 6000.0,
   };
 
+  String _normalizeCategoryLabel(String category) {
+    final normalized = category.trim().toLowerCase();
+
+    switch (normalized) {
+      case 'food':
+        return 'Food';
+      case 'cafe':
+      case 'café':
+        return 'Café';
+      case 'transport':
+        return 'Transport';
+      case 'entertainment':
+        return 'Entertainment';
+      case 'shopping':
+        return 'Shopping';
+      default:
+        return category.trim();
+    }
+  }
+
+  void _recordTransaction(
+    String merchant,
+    double amount, {
+    String? category,
+  }) {
+    ref.read(transactionProvider.notifier).addTransaction(
+          merchant,
+          amount,
+          category: category,
+        );
+
+    if (!mounted) return;
+
+    setState(() {
+      _remainingBalance -= amount;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    final existingExpenses = ref.read(transactionProvider).fold<double>(
+      0,
+      (sum, item) => sum + (item['amount'] as num).toDouble(),
+    );
+    _remainingBalance = totalIncome - existingExpenses;
     _loadThemePreference();
   }
 
@@ -173,8 +222,11 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
 
     for (final tx in transactions) {
       final merchant = tx['merchant'] ?? '';
-      final cat = getSmartCategory(merchant.toString());
-      if (cat.name == categoryName) {
+      final storedCategory = tx['category']?.toString();
+      final catName = _normalizeCategoryLabel(
+        storedCategory ?? getSmartCategory(merchant.toString()).name,
+      );
+      if (catName == categoryName) {
         final amt = tx['amount'] ?? 0;
         total += (amt is num) ? amt.toDouble() : 0.0;
       }
@@ -191,9 +243,12 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
     for (final tx in transactions) {
       final merchant = tx["merchant"] as String;
       final amount = (tx["amount"] as num).toDouble();
-      final cat = getSmartCategory(merchant);
+      final storedCategory = tx['category']?.toString();
+      final catName = _normalizeCategoryLabel(
+        storedCategory ?? getSmartCategory(merchant).name,
+      );
 
-      categoryTotals[cat.name] = (categoryTotals[cat.name] ?? 0) + amount;
+      categoryTotals[catName] = (categoryTotals[catName] ?? 0) + amount;
       totalExpense += amount;
     }
 
@@ -603,11 +658,16 @@ ${dataReport.toString()}
                 .toString();
         final extractedData = jsonDecode(rawJsonText.trim());
         final amount = extractedData['amount'];
+        final merchant = extractedData['merchant']?.toString() ?? 'Unknown Merchant';
+        final category = _normalizeCategoryLabel(
+          extractedData['category']?.toString() ?? '',
+        );
 
-        ref.read(transactionProvider.notifier).addTransaction(
-              extractedData['merchant']?.toString() ?? 'Unknown Merchant',
-              amount is num ? amount.toDouble() : 0.0,
-            );
+        _recordTransaction(
+          merchant,
+          amount is num ? amount.toDouble() : 0.0,
+          category: category.isEmpty ? null : category,
+        );
 
         setState(() {
           isScanLoading = false;
@@ -757,7 +817,7 @@ ${dataReport.toString()}
             onPressed: () {
               if (merchantController.text.isNotEmpty && amountController.text.isNotEmpty) {
                 final amt = double.tryParse(amountController.text) ?? 0.0;
-                ref.read(transactionProvider.notifier).addTransaction(merchantController.text, amt);
+                _recordTransaction(merchantController.text, amt);
                 Navigator.pop(ctx);
               }
             },
@@ -790,10 +850,10 @@ ${dataReport.toString()}
     }
 
     if (parsedAmount != null) {
-      ref.read(transactionProvider.notifier).addTransaction(
-            parsedMerchant == "Unknown" ? "Voice Transaction" : parsedMerchant,
-            parsedAmount,
-          );
+      _recordTransaction(
+        parsedMerchant == "Unknown" ? "Voice Transaction" : parsedMerchant,
+        parsedAmount,
+      );
     }
   }
 
@@ -901,7 +961,7 @@ ${dataReport.toString()}
 
     final transactions = ref.watch(transactionProvider);
     double totalExpenses = transactions.fold(0.0, (sum, item) => sum + item["amount"]);
-    double currentBalance = totalIncome - totalExpenses;
+    double currentBalance = _remainingBalance;
     final cardColor = isDarkMode ? Colors.grey[850]! : Colors.white;
     final textColor = isDarkMode ? Colors.white : Colors.black87;
 
