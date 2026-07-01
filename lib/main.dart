@@ -59,7 +59,7 @@ class TransactionNotifier extends Notifier<List<Map<String, dynamic>>> {
         "merchant": merchant,
         "amount": amount,
         "date": date ?? "Just Now",
-        if (category != null) "category": category,
+        "category": ?category,
       },
       ...state,
     ];
@@ -684,6 +684,44 @@ ${dataReport.toString()}
         setState(() {
           _remainingBalance -= parsedAmount;
         });
+
+        if (!mounted) return;
+        if (categoryBudgets.containsKey(category)) {
+          final categoryBudgetLimit = categoryBudgets[category]!;
+          final updatedCategorySpent = _getCategoryTotal(category);
+          final budgetUsage =
+              categoryBudgetLimit > 0 ? updatedCategorySpent / categoryBudgetLimit : 0.0;
+
+          if (budgetUsage >= 1.0 || budgetUsage >= 0.8) {
+            final isCritical = budgetUsage >= 1.0;
+            final alertColor = isCritical ? Colors.redAccent : Colors.orangeAccent;
+            final thresholdLabel = isCritical ? '100%' : '80%';
+            final message = isCritical
+                ? '⚠️ Budget exceeded for $category: ₹${updatedCategorySpent.toStringAsFixed(0)} / ₹${categoryBudgetLimit.toStringAsFixed(0)} used.'
+                : '⚠️ Budget warning for $category: ₹${updatedCategorySpent.toStringAsFixed(0)} / ₹${categoryBudgetLimit.toStringAsFixed(0)} used ($thresholdLabel+).';
+
+            ScaffoldMessenger.of(context)
+              ..clearSnackBars()
+              ..showSnackBar(
+                SnackBar(
+                  backgroundColor: alertColor,
+                  behavior: SnackBarBehavior.floating,
+                  content: Row(
+                    children: [
+                      const Icon(Icons.warning_amber_rounded, color: Colors.white),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          message,
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+          }
+        }
 
         setState(() {
           isScanLoading = false;
