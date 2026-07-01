@@ -131,6 +131,8 @@ class TransactionsScreen extends ConsumerStatefulWidget {
 class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
   final double totalIncome = 50000.00;
   double _remainingBalance = 50000.00;
+  final TextEditingController _searchController = TextEditingController();
+  String _transactionSearchQuery = '';
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _isListening = false;
   String _voiceWords = "";
@@ -197,6 +199,13 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
     );
     _remainingBalance = totalIncome - existingExpenses;
     _loadThemePreference();
+    _searchController.addListener(() {
+      final currentQuery = _searchController.text;
+      if (_transactionSearchQuery == currentQuery || !mounted) return;
+      setState(() {
+        _transactionSearchQuery = currentQuery;
+      });
+    });
   }
 
   Future<void> _loadThemePreference() async {
@@ -217,8 +226,36 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     _pinController.dispose();
     super.dispose();
+  }
+
+  List<Map<String, dynamic>> _getFilteredTransactions(
+    List<Map<String, dynamic>> transactions,
+  ) {
+    final query = _transactionSearchQuery.trim().toLowerCase();
+    if (query.isEmpty) return transactions;
+
+    final minAmountFilter = double.tryParse(query);
+
+    return transactions.where((tx) {
+      final merchantName =
+          tx['merchant']?.toString() ?? tx['merchantName']?.toString() ?? '';
+      final storedCategory = tx['category']?.toString();
+      final effectiveCategory = _normalizeCategoryLabel(
+        storedCategory == null || storedCategory.trim().isEmpty
+            ? getSmartCategory(merchantName).name
+            : storedCategory,
+      );
+      final amount = (tx['amount'] as num?)?.toDouble() ?? 0.0;
+
+      final merchantMatch = merchantName.toLowerCase().contains(query);
+      final categoryMatch = effectiveCategory.toLowerCase().contains(query);
+      final amountMatch = minAmountFilter != null && amount >= minAmountFilter;
+
+      return merchantMatch || categoryMatch || amountMatch;
+    }).toList();
   }
 
   double _getCategoryTotal(String categoryName) {
@@ -1014,6 +1051,7 @@ ${dataReport.toString()}
     }
 
     final transactions = ref.watch(transactionProvider);
+    final filteredTransactions = _getFilteredTransactions(transactions);
     double totalExpenses = transactions.fold(0.0, (sum, item) => sum + item["amount"]);
     double currentBalance = _remainingBalance;
     final cardColor = isDarkMode ? Colors.grey[850]! : Colors.white;
@@ -1196,13 +1234,53 @@ ${dataReport.toString()}
               ],
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+            child: TextField(
+              controller: _searchController,
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                hintText: 'Search by category, merchant, or amount...',
+                prefixIcon: const Icon(Icons.search_rounded),
+                suffixIcon: _searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        tooltip: 'Clear search',
+                        onPressed: () {
+                          _searchController.clear();
+                          FocusScope.of(context).unfocus();
+                        },
+                      ),
+                filled: true,
+                fillColor: isDarkMode ? Colors.grey[850] : Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                    color: isDarkMode ? Colors.grey.shade700 : Colors.grey.shade300,
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: Colors.teal, width: 1.4),
+                ),
+              ),
+            ),
+          ),
           ListView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            itemCount: transactions.length,
+            itemCount: filteredTransactions.length,
             itemBuilder: (context, index) {
-                final tx = transactions[index];
-                final smartCategory = getSmartCategory(tx["merchant"] as String);
+                final tx = filteredTransactions[index];
+                final merchantName =
+                    tx['merchant']?.toString() ?? tx['merchantName']?.toString() ?? 'Unknown Merchant';
+                final smartCategory = getSmartCategory(merchantName);
+                final amount = (tx['amount'] as num?)?.toDouble() ?? 0.0;
                 return Card(
                   margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                   elevation: 2,
@@ -1213,7 +1291,7 @@ ${dataReport.toString()}
                       child: Icon(smartCategory.icon, color: smartCategory.color),
                     ),
                     title: Text(
-                      tx["merchant"],
+                      merchantName,
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     subtitle: Align(
@@ -1236,7 +1314,7 @@ ${dataReport.toString()}
                       ),
                     ),
                     trailing: Text(
-                      '- ₹${tx["amount"].toStringAsFixed(2)}',
+                      '- ₹${amount.toStringAsFixed(2)}',
                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.redAccent),
                     ),
                   ),
